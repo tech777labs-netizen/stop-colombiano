@@ -31,16 +31,22 @@ function cleanName(name) {
   return String(name || '').trim().slice(0, 24) || 'Jugador';
 }
 
-async function getRoom(roomCode) {
+async function getRoom(roomCode, attempts = 1) {
   if (!roomCode) return null;
-  const store = roomStore();
-  const room = await store.get(roomCode.toUpperCase(), { type: 'json' });
-  if (!room) return null;
-  if (Date.now() - Number(room.updatedAt || 0) > ROOM_TTL_MS) {
-    await store.delete(roomCode.toUpperCase());
-    return null;
+  const key = roomCode.toUpperCase();
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const store = roomStore();
+    const room = await store.get(key, { type: 'json' });
+    if (room) {
+      if (Date.now() - Number(room.updatedAt || 0) > ROOM_TTL_MS) {
+        await store.delete(key);
+        return null;
+      }
+      return room;
+    }
+    if (attempt < attempts - 1) await new Promise((resolve) => setTimeout(resolve, 500));
   }
-  return room;
+  return null;
 }
 
 async function saveRoom(room) {
@@ -87,7 +93,7 @@ export const handler = async (event) => {
   try {
     if (event.httpMethod === 'GET') {
       const roomCode = event.queryStringParameters?.code?.toUpperCase();
-      const room = await getRoom(roomCode);
+      const room = await getRoom(roomCode, 8);
       if (!room) return json(404, { error: 'Sala no encontrada o vencida.' });
       return json(200, { room: publicRoom(room) });
     }
@@ -114,7 +120,7 @@ export const handler = async (event) => {
     }
 
     const roomCode = body.code?.toUpperCase();
-    const room = await getRoom(roomCode);
+    const room = await getRoom(roomCode, 8);
     if (!room) return json(404, { error: 'Sala no encontrada o vencida.' });
 
     if (action === 'join') {
