@@ -1,0 +1,22 @@
+{
+  "name": "stop-colombiano",
+  "version": "1.0.0",
+  "private": true,
+  "description": "MVP web para jugar Stop colombiano en familia con salas online.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "vite build",
+    "preview": "vite preview --host 0.0.0.0",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@netlify/blobs": "^10.0.11",
+    "nanoid": "^5.1.6"
+  },
+  "devDependencies": {
+    "netlify-cli": "^26.0.2",
+    "vite": "^7.2.4",
+    "vitest": "^4.0.15"
+  }
+}
