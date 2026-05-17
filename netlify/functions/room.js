@@ -93,7 +93,7 @@ export const handler = async (event) => {
   try {
     if (event.httpMethod === 'GET') {
       const roomCode = event.queryStringParameters?.code?.toUpperCase();
-      const room = await getRoom(roomCode, 8);
+      const room = await getRoom(roomCode, 30);
       if (!room) return json(404, { error: 'Sala no encontrada o vencida.' });
       return json(200, { room: publicRoom(room) });
     }
@@ -120,7 +120,7 @@ export const handler = async (event) => {
     }
 
     const roomCode = body.code?.toUpperCase();
-    const room = await getRoom(roomCode, 8);
+    const room = await getRoom(roomCode, 30);
     if (!room) return json(404, { error: 'Sala no encontrada o vencida.' });
 
     if (action === 'join') {
