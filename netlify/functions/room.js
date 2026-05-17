@@ -2,6 +2,13 @@ import { connectLambda, getStore } from '@netlify/blobs';
 import { calculateScores, DEFAULT_CATEGORIES } from '../../src/scoring.js';
 
 function roomStore() {
+  if (process.env.NETLIFY_SITE_ID && process.env.NETLIFY_BLOBS_TOKEN) {
+    return getStore({
+      name: 'stop-rooms',
+      siteID: process.env.NETLIFY_SITE_ID,
+      token: process.env.NETLIFY_BLOBS_TOKEN
+    });
+  }
   return getStore('stop-rooms');
 }
 const LETTERS = 'ABCDEFGHIJLMNOPQRSTUVZ'.split('');
