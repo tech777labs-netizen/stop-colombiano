@@ -1,7 +1,9 @@
-import { getStore } from '@netlify/blobs';
+import { connectLambda, getStore } from '@netlify/blobs';
 import { calculateScores, DEFAULT_CATEGORIES } from '../../src/scoring.js';
 
-const store = getStore('stop-rooms');
+function roomStore() {
+  return getStore('stop-rooms');
+}
 const LETTERS = 'ABCDEFGHIJLMNOPQRSTUVZ'.split('');
 const ROOM_TTL_MS = 1000 * 60 * 60 * 12;
 
@@ -24,6 +26,7 @@ function cleanName(name) {
 
 async function getRoom(roomCode) {
   if (!roomCode) return null;
+  const store = roomStore();
   const room = await store.get(roomCode.toUpperCase(), { type: 'json' });
   if (!room) return null;
   if (Date.now() - Number(room.updatedAt || 0) > ROOM_TTL_MS) {
@@ -34,6 +37,7 @@ async function getRoom(roomCode) {
 }
 
 async function saveRoom(room) {
+  const store = roomStore();
   room.updatedAt = Date.now();
   await store.setJSON(room.code, room);
   return room;
@@ -72,6 +76,7 @@ function currentRound(room) {
 }
 
 export const handler = async (event) => {
+  connectLambda(event);
   try {
     if (event.httpMethod === 'GET') {
       const roomCode = event.queryStringParameters?.code?.toUpperCase();
