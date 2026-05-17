@@ -56,12 +56,15 @@ function initialAudit(players, submissions, categories, letter) {
   return audit;
 }
 
-function freezeSubmissions(room, round) {
+async function freezeSubmissions(room, round, stopperPlayerId, stopperAnswers) {
   const frozen = {};
   for (const player of room.players) {
+    const draft = player.id === stopperPlayerId && stopperAnswers
+      ? { ...sanitizeAnswers(stopperAnswers, room.categories), submittedAt: Date.now() }
+      : await getDraft(room, round, player.id, 12);
     frozen[player.id] = {
-      ...sanitizeAnswers(round.drafts?.[player.id] || round.submissions?.[player.id] || {}, room.categories),
-      submittedAt: round.drafts?.[player.id]?.submittedAt || round.submissions?.[player.id]?.submittedAt || Date.now()
+      ...sanitizeAnswers(draft || round.submissions?.[player.id] || {}, room.categories),
+      submittedAt: draft?.submittedAt || round.submissions?.[player.id]?.submittedAt || Date.now()
     };
   }
   return frozen;
@@ -90,6 +93,28 @@ async function saveRoom(room) {
   room.updatedAt = Date.now();
   await store.setJSON(room.code, room);
   return room;
+}
+
+function draftKey(roomCode, roundNumber, playerId) {
+  return `${roomCode}:draft:${roundNumber}:${playerId}`;
+}
+
+async function saveDraft(room, round, playerId, answers) {
+  const store = roomStore();
+  const draft = { ...sanitizeAnswers(answers, room.categories), submittedAt: Date.now() };
+  await store.setJSON(draftKey(room.code, round.number, playerId), draft);
+  return draft;
+}
+
+async function getDraft(room, round, playerId, attempts = 1) {
+  const store = roomStore();
+  const key = draftKey(room.code, round.number, playerId);
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const draft = await store.get(key, { type: 'json' });
+    if (draft) return draft;
+    if (attempt < attempts - 1) await new Promise((resolve) => setTimeout(resolve, 300));
+  }
+  return null;
 }
 
 function publicRoom(room) {
@@ -189,25 +214,28 @@ export const handler = async (event) => {
     if (action === 'draft' || action === 'submit') {
       const round = currentRound(room);
       if (!round || round.status !== 'playing') return json(400, { error: 'No hay una ronda activa.' });
-      const answers = sanitizeAnswers(body.answers, room.categories);
-      round.drafts = round.drafts || {};
-      round.drafts[body.playerId] = { ...answers, submittedAt: Date.now() };
-      if (action === 'submit') round.submissions[body.playerId] = { ...answers, submittedAt: Date.now() };
-      await saveRoom(room);
+      const draft = await saveDraft(room, round, body.playerId, body.answers);
+      // No guardamos el room completo en cada tecla: evita carreras entre jugadores en Netlify Blobs.
+      // El cierre de ronda lee los drafts por jugador y congela el estado final.
+      if (action === 'submit') {
+        round.submissions[body.playerId] = draft;
+        await saveRoom(room);
+      }
       return json(200, { room: publicRoom(room) });
     }
 
     if (action === 'stop') {
       const round = currentRound(room);
       if (!round || round.status !== 'playing') return json(400, { error: 'No hay una ronda activa.' });
+      let stopperAnswers = null;
       if (body.answers) {
-        round.drafts = round.drafts || {};
-        round.drafts[body.playerId] = { ...sanitizeAnswers(body.answers, room.categories), submittedAt: Date.now() };
+        stopperAnswers = sanitizeAnswers(body.answers, room.categories);
+        await saveDraft(room, round, body.playerId, stopperAnswers);
       }
       round.status = 'audit';
       round.stoppedAt = Date.now();
       round.stoppedBy = body.playerId;
-      round.submissions = freezeSubmissions(room, round);
+      round.submissions = await freezeSubmissions(room, round, body.playerId, stopperAnswers);
       round.audit = initialAudit(room.players, round.submissions, room.categories, round.letter);
       round.scores = null;
       room.status = 'audit';
