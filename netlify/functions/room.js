@@ -1,5 +1,5 @@
 import { connectLambda, getStore } from '@netlify/blobs';
-import { calculateScores, DEFAULT_CATEGORIES } from '../../src/scoring.js';
+import { calculateScores, DEFAULT_CATEGORIES, normalizeAnswer } from '../../src/scoring.js';
 
 function roomStore() {
   if (process.env.STOP_BLOBS_SITE_ID && process.env.STOP_BLOBS_TOKEN) {
@@ -29,6 +29,42 @@ function code() {
 
 function cleanName(name) {
   return String(name || '').trim().slice(0, 24) || 'Jugador';
+}
+
+function sanitizeAnswers(rawAnswers = {}, categories = DEFAULT_CATEGORIES) {
+  const answers = {};
+  for (const category of categories) answers[category] = String(rawAnswers?.[category] || '').slice(0, 80);
+  return answers;
+}
+
+function startsWithRoundLetter(answer, letter) {
+  const normalized = normalizeAnswer(answer);
+  const normalizedLetter = normalizeAnswer(letter).slice(0, 1);
+  return Boolean(normalized && normalized.startsWith(normalizedLetter));
+}
+
+function initialAudit(players, submissions, categories, letter) {
+  const audit = {};
+  for (const player of players) {
+    audit[player.id] = {};
+    for (const category of categories) {
+      const answer = submissions?.[player.id]?.[category] || '';
+      // Vacías quedan inválidas automáticamente; letra incorrecta queda marcada como inválida sugerida.
+      audit[player.id][category] = Boolean(normalizeAnswer(answer)) && startsWithRoundLetter(answer, letter);
+    }
+  }
+  return audit;
+}
+
+function freezeSubmissions(room, round) {
+  const frozen = {};
+  for (const player of room.players) {
+    frozen[player.id] = {
+      ...sanitizeAnswers(round.drafts?.[player.id] || round.submissions?.[player.id] || {}, room.categories),
+      submittedAt: round.drafts?.[player.id]?.submittedAt || round.submissions?.[player.id]?.submittedAt || Date.now()
+    };
+  }
+  return frozen;
 }
 
 async function getRoom(roomCode, attempts = 1) {
@@ -67,6 +103,10 @@ function requirePlayer(room, playerId) {
   return room.players.some((p) => p.id === playerId);
 }
 
+function isHost(room, playerId) {
+  return Boolean(room.players.find((p) => p.id === playerId)?.host);
+}
+
 function nextRoundNumber(room) {
   return (room.rounds?.length || 0) + 1;
 }
@@ -79,8 +119,11 @@ function buildRound(room, letter) {
     startedAt: Date.now(),
     stoppedAt: null,
     stoppedBy: null,
+    drafts: {},
     submissions: {},
-    scores: null
+    audit: null,
+    scores: null,
+    finalized: false
   };
 }
 
@@ -136,19 +179,20 @@ export const handler = async (event) => {
 
     if (action === 'start') {
       const round = currentRound(room);
-      if (round?.status === 'playing') return json(400, { error: 'Ya hay una ronda en juego.' });
+      if (round?.status === 'playing' || round?.status === 'audit') return json(400, { error: 'Cierra o finaliza la ronda actual primero.' });
       room.status = 'playing';
       room.rounds.push(buildRound(room, body.letter));
       await saveRoom(room);
       return json(200, { room: publicRoom(room) });
     }
 
-    if (action === 'submit') {
+    if (action === 'draft' || action === 'submit') {
       const round = currentRound(room);
       if (!round || round.status !== 'playing') return json(400, { error: 'No hay una ronda activa.' });
-      const answers = {};
-      for (const category of room.categories) answers[category] = String(body.answers?.[category] || '').slice(0, 80);
-      round.submissions[body.playerId] = { ...answers, submittedAt: Date.now() };
+      const answers = sanitizeAnswers(body.answers, room.categories);
+      round.drafts = round.drafts || {};
+      round.drafts[body.playerId] = { ...answers, submittedAt: Date.now() };
+      if (action === 'submit') round.submissions[body.playerId] = { ...answers, submittedAt: Date.now() };
       await saveRoom(room);
       return json(200, { room: publicRoom(room) });
     }
@@ -157,15 +201,46 @@ export const handler = async (event) => {
       const round = currentRound(room);
       if (!round || round.status !== 'playing') return json(400, { error: 'No hay una ronda activa.' });
       if (body.answers) {
-        const answers = {};
-        for (const category of room.categories) answers[category] = String(body.answers?.[category] || '').slice(0, 80);
-        round.submissions[body.playerId] = { ...answers, submittedAt: Date.now() };
+        round.drafts = round.drafts || {};
+        round.drafts[body.playerId] = { ...sanitizeAnswers(body.answers, room.categories), submittedAt: Date.now() };
       }
-      round.status = 'stopped';
+      round.status = 'audit';
       round.stoppedAt = Date.now();
       round.stoppedBy = body.playerId;
-      round.scores = calculateScores(room.players, round.submissions, room.categories);
-      for (const player of room.players) player.score = (player.score || 0) + (round.scores.playerTotals[player.id] || 0);
+      round.submissions = freezeSubmissions(room, round);
+      round.audit = initialAudit(room.players, round.submissions, room.categories, round.letter);
+      round.scores = null;
+      room.status = 'audit';
+      await saveRoom(room);
+      return json(200, { room: publicRoom(room) });
+    }
+
+    if (action === 'audit') {
+      const round = currentRound(room);
+      if (!round || round.status !== 'audit') return json(400, { error: 'No hay una ronda en auditoría.' });
+      if (!isHost(room, body.playerId)) return json(403, { error: 'Solo el anfitrión puede auditar respuestas.' });
+      const targetPlayerId = String(body.targetPlayerId || '');
+      const category = String(body.category || '');
+      if (!room.players.some((p) => p.id === targetPlayerId) || !room.categories.includes(category)) {
+        return json(400, { error: 'Respuesta a auditar inválida.' });
+      }
+      round.audit = round.audit || initialAudit(room.players, round.submissions, room.categories, round.letter);
+      round.audit[targetPlayerId] = round.audit[targetPlayerId] || {};
+      round.audit[targetPlayerId][category] = Boolean(body.valid);
+      await saveRoom(room);
+      return json(200, { room: publicRoom(room) });
+    }
+
+    if (action === 'finalize') {
+      const round = currentRound(room);
+      if (!round || round.status !== 'audit') return json(400, { error: 'No hay una ronda en auditoría.' });
+      if (!isHost(room, body.playerId)) return json(403, { error: 'Solo el anfitrión puede finalizar la auditoría.' });
+      round.scores = calculateScores(room.players, round.submissions, room.categories, round.audit);
+      if (!round.finalized) {
+        for (const player of room.players) player.score = (player.score || 0) + (round.scores.playerTotals[player.id] || 0);
+        round.finalized = true;
+      }
+      round.status = 'results';
       room.status = 'results';
       await saveRoom(room);
       return json(200, { room: publicRoom(room) });

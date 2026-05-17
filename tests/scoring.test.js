@@ -24,7 +24,32 @@ describe('reglas de puntaje de Stop', () => {
     expect(result.playerTotals).toEqual({ p1: 100, p2: 250, p3: 250 });
     expect(result.byPlayer.p1.animal).toMatchObject({ points: 50, duplicate: true });
     expect(result.byPlayer.p3.animal).toMatchObject({ points: 100, duplicate: false });
-    expect(result.byPlayer.p1.comida).toMatchObject({ points: 0 });
+    expect(result.byPlayer.p1.comida).toMatchObject({ points: 0, reason: 'vacía' });
+  });
+
+  it('no puntúa respuestas invalidadas en auditoría ni las usa para detectar repetidas', () => {
+    const players = [
+      { id: 'p1', name: 'Ana' },
+      { id: 'p2', name: 'Luis' },
+      { id: 'p3', name: 'Marta' }
+    ];
+    const submissions = {
+      p1: { animal: 'Perro' },
+      p2: { animal: 'perro' },
+      p3: { animal: 'Puma' }
+    };
+    const audit = {
+      p1: { animal: true },
+      p2: { animal: false },
+      p3: { animal: true }
+    };
+
+    const result = calculateScores(players, submissions, ['animal'], audit);
+
+    expect(result.byPlayer.p1.animal).toMatchObject({ points: 100, duplicate: false, valid: true });
+    expect(result.byPlayer.p2.animal).toMatchObject({ points: 0, duplicate: false, valid: false, reason: 'inválida' });
+    expect(result.byPlayer.p3.animal).toMatchObject({ points: 100, duplicate: false, valid: true });
+    expect(result.playerTotals).toEqual({ p1: 100, p2: 0, p3: 100 });
   });
 
   it('incluye categorías colombianas por defecto', () => {

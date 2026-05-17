@@ -17,7 +17,13 @@ export function normalizeAnswer(value = '') {
     .replace(/\s+/g, ' ');
 }
 
-export function calculateScores(players, submissions, categories = DEFAULT_CATEGORIES) {
+function isAuditedValid(audit, playerId, category, normalized) {
+  if (!normalized) return false;
+  const value = audit?.[playerId]?.[category];
+  return value === undefined ? true : Boolean(value);
+}
+
+export function calculateScores(players, submissions, categories = DEFAULT_CATEGORIES, audit = null) {
   const byCategory = {};
   const byPlayer = {};
   const playerTotals = {};
@@ -32,7 +38,7 @@ export function calculateScores(players, submissions, categories = DEFAULT_CATEG
     for (const player of players) {
       const answer = submissions?.[player.id]?.[category] ?? '';
       const normalized = normalizeAnswer(answer);
-      if (!normalized) continue;
+      if (!isAuditedValid(audit, player.id, category, normalized)) continue;
       counts.set(normalized, (counts.get(normalized) ?? 0) + 1);
     }
 
@@ -40,9 +46,11 @@ export function calculateScores(players, submissions, categories = DEFAULT_CATEG
     for (const player of players) {
       const raw = submissions?.[player.id]?.[category] ?? '';
       const normalized = normalizeAnswer(raw);
-      const duplicate = normalized ? counts.get(normalized) > 1 : false;
-      const points = !normalized ? 0 : duplicate ? 50 : 100;
-      const entry = { answer: raw, normalized, duplicate, points };
+      const valid = isAuditedValid(audit, player.id, category, normalized);
+      const duplicate = valid ? counts.get(normalized) > 1 : false;
+      const points = !normalized ? 0 : !valid ? 0 : duplicate ? 50 : 100;
+      const reason = !normalized ? 'vacía' : !valid ? 'inválida' : duplicate ? 'repetida' : 'única';
+      const entry = { answer: raw, normalized, valid, duplicate, points, reason };
       byCategory[category][player.id] = entry;
       byPlayer[player.id][category] = entry;
       playerTotals[player.id] += points;
