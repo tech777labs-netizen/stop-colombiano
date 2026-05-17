@@ -55,16 +55,30 @@ function startPolling() {
   state.poll = setInterval(async () => {
     if (!state.room?.code) return;
     try {
+      const wasEditingAnswers = isEditingAnswers();
+      const previousStatus = state.room.status;
+      const previousRound = currentRound()?.number;
       const res = await fetch(`${API}?code=${encodeURIComponent(state.room.code)}`);
       if (!res.ok) return;
       const data = await res.json();
-      const previousRound = currentRound()?.number;
       state.room = data.room;
+      const samePlayableRound = state.room.status === 'playing'
+        && previousStatus === 'playing'
+        && currentRound()?.number === previousRound;
+
       if (currentRound()?.number !== previousRound) state.answers = {};
       hydrateAnswersFromCurrentRound();
+
+      // No reemplazar todo el HTML mientras alguien escribe respuestas.
+      // En móviles, el polling sacaba el foco/cerraba el teclado y parecía que "no dejaba escribir".
+      if (wasEditingAnswers && samePlayableRound && !isMySubmissionReady()) return;
       render();
     } catch {}
   }, 1800);
+}
+
+function isEditingAnswers() {
+  return Boolean(document.activeElement?.closest?.('.answers'));
 }
 
 function currentRound() {
